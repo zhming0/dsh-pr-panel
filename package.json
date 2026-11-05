@@ -5,7 +5,8 @@
   "license": "MIT",
   "packageManager": "pnpm@12.16.1",
   "engines": {
-    "node": ">=24.9.0"
+    "node": ">=24.9.0",
+    "dsh": "0.2.2-rc.1"
   },
   "type": "module",
   "main": "lib/index.js",
@@ -63,5 +64,13 @@
     "@types/node": "24.3.0",
     "typescript": "5.9.2",
     "vitest": "4.1.11"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zhming0/dsh-pr-panel.git"
+  },
+  "homepage": "https://github.com/zhming0/dsh-pr-panel#readme",
+  "bugs": {
+    "url": "https://github.com/zhming0/dsh-pr-panel/issues"
   }
 }
