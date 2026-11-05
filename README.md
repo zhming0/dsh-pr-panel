@@ -132,6 +132,9 @@ a build step. Rebuild and commit it when changing `src/`.
 
 ## Limitations
 
+- Do not enable the official **Change requests & worktrees** bundle at the same
+  time. Both bundles use the same forge row ids; this one is meant to replace
+  that composition.
 - GitHub only. GitHub Enterprise hosts must be listed in `hosts`; GitLab and
   other code hosts are not supported.
 - The panel still includes the upstream local-changes card. It inspects the
