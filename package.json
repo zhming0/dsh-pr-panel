@@ -1,0 +1,63 @@
+{
+  "name": "@zhming0/dsh-pr-panel",
+  "version": "0.1.0",
+  "description": "Pull request panel for DSH Web: review GitHub PR diffs from a sandboxed Session, without worktrees",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./github": {
+      "types": "./lib/github.d.ts",
+      "default": "./lib/github.js"
+    },
+    "./initiator": {
+      "types": "./lib/initiator.d.ts",
+      "default": "./lib/initiator.js"
+    },
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-credentials": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-experimental-client-ui-forge": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-experimental-forge": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-experimental-forge-session": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-experimental-worktree": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-timeout": "0.2.2-rc.1",
+    "@deepseek-ai/schemastery": "3.19.0",
+    "zod": "^4.4.3"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.1.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/dsh-agent": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-brand": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-session": "0.2.2-rc.1",
+    "@types/node": "24.3.0",
+    "typescript": "5.9.2",
+    "vitest": "4.1.11"
+  }
+}

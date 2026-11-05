@@ -1,0 +1,27 @@
+# Pull request panel without the worktree feature.
+#
+# The panel, provider registry, and Session bindings are the upstream
+# experimental packages. Only the GitHub provider and the execution-boundary
+# wrapper are ours. No worktree row is mounted, so the panel hides its worktree
+# controls and nothing creates checkouts.
+- insert:
+    - id: forge
+      name: '@deepseek-ai/dsh-experimental-forge'
+
+    - id: forge-github
+      name: '@zhming0/dsh-pr-panel/github'
+
+    - id: forge-session
+      name: '@deepseek-ai/dsh-experimental-forge-session'
+
+    - id: optional-forge-panel
+      name: cordis:group
+      group: true
+      isolate:
+        worktrees: true
+      config:
+        - id: forge-panel
+          name: '@deepseek-ai/dsh-experimental-client-ui-forge'
+
+    - id: pr-panel-initiator
+      name: '@zhming0/dsh-pr-panel/initiator'

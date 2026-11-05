@@ -1,0 +1,12 @@
+This package contains code derived from DeepSeek Harness:
+
+  https://github.com/deepseek-ai/deepseek-harness
+  packages/experimental/forge-github
+
+Copyright (c) DeepSeek
+Licensed under the MIT License.
+
+The derived files are src/provider.ts, src/graphql.ts, src/urls.ts,
+src/review.ts, and the provider-facing parts of src/github-runner.ts.
+They have been modified for a token-based HTTP runner and this bundle's
+package identity.

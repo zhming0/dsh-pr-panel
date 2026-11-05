@@ -1,0 +1,321 @@
+/**
+ * A `gh`-compatible command runner backed by the GitHub HTTP API.
+ *
+ * The upstream forge provider is written against the GitHub CLI's argv and
+ * output shapes. Keeping that interface lets this repository reuse the
+ * provider, GraphQL documents, and review writer while replacing only the
+ * process boundary: no `gh` binary and no host subprocess are involved.
+ *
+ * The runner understands the small command surface the provider uses:
+ * `auth status`, `pr diff`, `pr ready`, and `api` (REST and GraphQL).
+ */
+
+/** Complete output of one request that reached an HTTP status. */
+export interface GhOutput {
+  readonly exitCode: number
+  readonly stdout: string
+  readonly stderr: string
+}
+
+/** Runs one `gh`-shaped command; rejects when no HTTP status was reached. */
+export type GhRunner = (args: readonly string[], signal: AbortSignal, input?: string) => Promise<GhOutput>
+
+/** Token lookup and request limits for one runner. */
+export interface GitHubRunnerConfig {
+  /** Resolves the token for each request, so a rotated credential is used next time. */
+  readonly token: () => Promise<string | undefined>
+  /** Deadline in milliseconds for one request. */
+  readonly timeoutMs: number
+  /** Maximum captured bytes for one response body. */
+  readonly maxOutputBytes: number
+  /** Injectable fetch for tests. */
+  readonly fetch?: typeof fetch
+}
+
+/** Thrown when the token is missing or the network cannot be reached. */
+export class GhUnavailableError extends Error {
+  override name = 'GhUnavailableError'
+}
+
+/** Thrown when one request outlives `timeoutMs`. */
+export class GhTimeoutError extends Error {
+  override name = 'GhTimeoutError'
+}
+
+/** Thrown when one response body exceeds `maxOutputBytes`. */
+export class GhOutputLimitError extends Error {
+  override name = 'GhOutputLimitError'
+}
+
+/** The subset of the `gh` argument grammar used by the forge provider. */
+interface ApiArgs {
+  readonly host: string
+  readonly method: string
+  readonly endpoint: string
+  readonly headers: Record<string, string>
+  readonly fields: Record<string, string>
+  readonly input: string | undefined
+}
+
+interface Repository {
+  readonly host: string
+  readonly owner: string
+  readonly name: string
+}
+
+const DEFAULT_HOST = 'github.com'
+const USER_AGENT = 'dsh-pr-panel'
+
+/**
+ * Build a runner that speaks the provider's `gh` argv but calls GitHub over HTTP.
+ * @param config - token lookup, deadline, output limit, and optional fetch.
+ * @returns the runner consumed by `GitHubProvider`.
+ */
+export function githubRunner(config: GitHubRunnerConfig): GhRunner {
+  const fetchImpl = config.fetch ?? globalThis.fetch
+  if (fetchImpl === undefined) throw new Error('dsh-pr-panel: fetch is not available')
+
+  const call = async (url: string, init: RequestInit, signal: AbortSignal, token: string): Promise<GhOutput> => {
+    const response = await fetchImpl(url, {
+      ...init,
+      headers: { Authorization: `Bearer ${token}`, 'User-Agent': USER_AGENT, ...init.headers },
+      signal,
+    })
+    const text = await response.text()
+    if (byteLength(text) > config.maxOutputBytes) {
+      throw new GhOutputLimitError(`GitHub response exceeds maxOutputBytes (${config.maxOutputBytes})`)
+    }
+    if (!response.ok) {
+      return { exitCode: response.status, stdout: text, stderr: `request failed (HTTP ${response.status}): ${messageFromBody(text)}` }
+    }
+    return { exitCode: 0, stdout: text, stderr: '' }
+  }
+
+  const graphql = async (args: ApiArgs, signal: AbortSignal, token: string): Promise<GhOutput> => {
+    const query = args.fields.query
+    if (query === undefined) throw new GhUnavailableError('gh api graphql requires a query field')
+    const variables = Object.fromEntries(Object.entries(args.fields).filter(([key]) => key !== 'query'))
+    return await call(graphqlUrl(args.host), {
+      method: 'POST',
+      headers: accept('application/vnd.github+json'),
+      body: JSON.stringify({ query, variables }),
+    }, signal, token)
+  }
+
+  const rest = async (args: ApiArgs, signal: AbortSignal, token: string, input: string | undefined): Promise<GhOutput> => {
+    const method = args.method.toUpperCase()
+    const headers: Record<string, string> = { ...accept('application/vnd.github+json'), ...args.headers }
+    const url = new URL(`${restBase(args.host)}/${args.endpoint.replace(/^\/+/, '')}`)
+    let body: string | undefined
+    if (method === 'GET') {
+      for (const [key, value] of Object.entries(args.fields)) url.searchParams.set(key, value)
+    } else if (input !== undefined) {
+      body = input
+      headers['Content-Type'] = headers['Content-Type'] ?? 'application/json'
+    } else if (Object.keys(args.fields).length > 0) {
+      body = JSON.stringify(args.fields)
+      headers['Content-Type'] = 'application/json'
+    }
+    return await call(url.toString(), { method, headers, ...(body === undefined ? {} : { body }) }, signal, token)
+  }
+
+  const ready = async (repository: Repository, number: number, signal: AbortSignal, token: string): Promise<GhOutput> => {
+    const read = await graphql({
+      host: repository.host,
+      method: 'POST',
+      endpoint: 'graphql',
+      headers: {},
+      fields: {
+        query: `query($owner: String!, $name: String!, $number: Int!) {
+          repository(owner: $owner, name: $name) { pullRequest(number: $number) { id isDraft } }
+        }`,
+        owner: repository.owner,
+        name: repository.name,
+        number: String(number),
+      },
+      input: undefined,
+    }, signal, token)
+    if (read.exitCode !== 0) return read
+    const body = JSON.parse(read.stdout) as {
+      data?: { repository?: { pullRequest?: { id?: string; isDraft?: boolean } } }
+    }
+    const pull = body.data?.repository?.pullRequest
+    if (pull?.id === undefined) return { exitCode: 1, stdout: read.stdout, stderr: 'pull request not found' }
+    if (pull.isDraft !== true) return { exitCode: 0, stdout: '', stderr: '' }
+    return await graphql({
+      host: repository.host,
+      method: 'POST',
+      endpoint: 'graphql',
+      headers: {},
+      fields: {
+        query: `mutation($id: ID!) {
+          markPullRequestReadyForReview(input: { pullRequestId: $id }) { pullRequest { isDraft } }
+        }`,
+        id: pull.id,
+      },
+      input: undefined,
+    }, signal, token)
+  }
+
+  const request = async (
+    signal: AbortSignal,
+    run: (token: string, deadline: AbortSignal) => Promise<GhOutput>,
+  ): Promise<GhOutput> => {
+    signal.throwIfAborted()
+    const token = await config.token()
+    if (token === undefined || token.length === 0) throw new GhUnavailableError('GITHUB_TOKEN is not set')
+    return await withDeadline(signal, config.timeoutMs, async (deadline) => {
+      try {
+        return await run(token, deadline)
+      } catch (error) {
+        if (deadline.aborted && !signal.aborted) throw new GhTimeoutError(`GitHub request timed out after ${config.timeoutMs}ms`)
+        signal.throwIfAborted()
+        if (error instanceof GhUnavailableError || error instanceof GhTimeoutError || error instanceof GhOutputLimitError) throw error
+        throw new GhUnavailableError(`GitHub request failed: ${messageOf(error)}`, { cause: error })
+      }
+    })
+  }
+
+  return async (args, signal, input) => {
+    const [command, subcommand] = args
+    if (command === 'auth' && subcommand === 'status') {
+      return await request(signal, async (token, deadline) => {
+        const host = hostOf(args)
+        return await call(`${restBase(host)}/user`, { method: 'GET', headers: accept('application/vnd.github+json') }, deadline, token)
+      })
+    }
+    if (command === 'pr' && subcommand === 'diff') {
+      return await request(signal, async (token, deadline) => {
+        const repository = repositoryOf(args)
+        const number = numberOf(args)
+        return await call(
+          `${restBase(repository.host)}/repos/${repository.owner}/${repository.name}/pulls/${number}`,
+          { method: 'GET', headers: accept('application/vnd.github.v3.diff') },
+          deadline,
+          token,
+        )
+      })
+    }
+    if (command === 'pr' && subcommand === 'ready') {
+      return await request(signal, async (token, deadline) => await ready(repositoryOf(args), numberOf(args), deadline, token))
+    }
+    if (command === 'api') {
+      return await request(signal, async (token, deadline) => {
+        const parsed = parseApiArgs(args)
+        if (parsed.endpoint === 'graphql') return await graphql(parsed, deadline, token)
+        return await rest(parsed, deadline, token, input)
+      })
+    }
+    throw new GhUnavailableError(`unsupported gh command: ${args.join(' ')}`)
+  }
+}
+
+function parseApiArgs(args: readonly string[]): ApiArgs {
+  let host = DEFAULT_HOST
+  let method = 'GET'
+  let endpoint = ''
+  const headers: Record<string, string> = {}
+  const fields: Record<string, string> = {}
+  let input: string | undefined
+  for (let index = 1; index < args.length; index++) {
+    const arg = args[index]!
+    if (arg === '--hostname') { host = requireValue(args, ++index, arg); continue }
+    if (arg === '--method') { method = requireValue(args, ++index, arg); continue }
+    if (arg === '-H' || arg === '--header') {
+      const header = requireValue(args, ++index, arg)
+      const separator = header.indexOf(':')
+      if (separator <= 0) throw new GhUnavailableError(`invalid header: ${header}`)
+      headers[header.slice(0, separator).trim()] = header.slice(separator + 1).trim()
+      continue
+    }
+    if (arg === '-f' || arg === '--raw-field') {
+      const field = requireValue(args, ++index, arg)
+      const separator = field.indexOf('=')
+      if (separator <= 0) throw new GhUnavailableError(`invalid field: ${field}`)
+      fields[field.slice(0, separator)] = field.slice(separator + 1)
+      continue
+    }
+    if (arg === '--input') { input = requireValue(args, ++index, arg); continue }
+    if (arg.startsWith('-')) throw new GhUnavailableError(`unsupported gh api option: ${arg}`)
+    if (endpoint.length > 0) throw new GhUnavailableError(`unexpected gh api argument: ${arg}`)
+    endpoint = arg
+  }
+  return { host, method, endpoint, headers, fields, input }
+}
+
+function hostOf(args: readonly string[]): string {
+  const index = args.indexOf('--hostname')
+  return index >= 0 && args[index + 1] !== undefined ? args[index + 1]! : DEFAULT_HOST
+}
+
+function repositoryOf(args: readonly string[]): Repository {
+  const index = args.indexOf('--repo')
+  const value = index >= 0 ? args[index + 1] : undefined
+  if (value === undefined) throw new GhUnavailableError('pr command requires --repo')
+  const parts = value.split('/')
+  const [host, owner, name] = parts
+  if (parts.length !== 3 || host === undefined || owner === undefined || name === undefined) {
+    throw new GhUnavailableError(`invalid repository: ${value}`)
+  }
+  return { host, owner, name }
+}
+
+function numberOf(args: readonly string[]): number {
+  const value = Number(args[2])
+  if (!Number.isSafeInteger(value) || value <= 0) throw new GhUnavailableError(`invalid pull request number: ${args[2]}`)
+  return value
+}
+
+function requireValue(args: readonly string[], index: number, flag: string): string {
+  const value = args[index]
+  if (value === undefined) throw new GhUnavailableError(`${flag} requires a value`)
+  return value
+}
+
+function restBase(host: string): string {
+  return host === DEFAULT_HOST ? 'https://api.github.com' : `https://${host}/api/v3`
+}
+
+function graphqlUrl(host: string): string {
+  return host === DEFAULT_HOST ? 'https://api.github.com/graphql' : `https://${host}/api/graphql`
+}
+
+function accept(value: string): Record<string, string> {
+  return { Accept: value }
+}
+
+function byteLength(value: string): number {
+  return Buffer.byteLength(value, 'utf8')
+}
+
+function messageFromBody(body: string): string {
+  try {
+    const parsed = JSON.parse(body) as { message?: unknown; errors?: Array<{ message?: unknown }> }
+    if (typeof parsed.message === 'string' && parsed.message.length > 0) return parsed.message
+    const first = parsed.errors?.[0]?.message
+    if (typeof first === 'string' && first.length > 0) return first
+  } catch {
+    // The body is not JSON; use its first line.
+  }
+  return body.split(/\r?\n/).map(line => line.trim()).find(line => line.length > 0) ?? 'no diagnostic'
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+async function withDeadline(
+  signal: AbortSignal,
+  timeoutMs: number,
+  run: (deadline: AbortSignal) => Promise<GhOutput>,
+): Promise<GhOutput> {
+  const timeout = new AbortController()
+  const timer = setTimeout(() => timeout.abort(new GhTimeoutError(`GitHub request timed out after ${timeoutMs}ms`)), timeoutMs)
+  timer.unref?.()
+  const deadline = AbortSignal.any([signal, timeout.signal])
+  try {
+    return await run(deadline)
+  } finally {
+    clearTimeout(timer)
+  }
+}
