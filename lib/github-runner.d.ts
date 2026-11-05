@@ -16,11 +16,16 @@ export interface GhOutput {
     readonly stderr: string;
 }
 /** Runs one `gh`-shaped command; rejects when no HTTP status was reached. */
-export type GhRunner = (args: readonly string[], signal: AbortSignal, input?: string) => Promise<GhOutput>;
+export type GhRunner = (args: readonly string[], signal: AbortSignal, input?: string, credential?: GitHubCredentialRequest) => Promise<GhOutput>;
+/** One host and optional repository whose credential a request needs. */
+export interface GitHubCredentialRequest {
+    readonly host: string;
+    readonly repositoryUrl?: string;
+}
 /** Token lookup and request limits for one runner. */
 export interface GitHubRunnerConfig {
     /** Resolves the token for each request, so a rotated credential is used next time. */
-    readonly token: () => Promise<string | undefined>;
+    readonly token: (request: GitHubCredentialRequest) => Promise<string | undefined>;
     /** Deadline in milliseconds for one request. */
     readonly timeoutMs: number;
     /** Maximum captured bytes for one response body. */

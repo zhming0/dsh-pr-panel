@@ -48,5 +48,5 @@ export declare class GitHubProvider implements ForgeProvider {
     /** Run one `gh` command; a `gh` that cannot start resolves to its error, and every other rejection passes on. */
     private attempt;
     private hostFailure;
-    private fetchHost;
+    private fetchRepository;
 }

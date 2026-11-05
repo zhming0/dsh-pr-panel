@@ -31,6 +31,21 @@ describe('GitHubProvider', () => {
     await expect(provider.diff(ref, new AbortController().signal)).resolves.toBe('diff --git a/a b/a\n')
   })
 
+  it('passes the repository credential context to the runner', async () => {
+    const seen: unknown[] = []
+    const provider = new GitHubProvider(async (_args, _signal, _input, credential) => {
+      seen.push(credential)
+      return { exitCode: 0, stdout: 'diff --git a/a b/a\n', stderr: '' }
+    }, ['github.com'], 1_024)
+    await provider.diff(ref, new AbortController().signal)
+    expect(seen).toEqual([
+      {
+        host: 'github.com',
+        repositoryUrl: 'https://github.com/zhming0/dsh-workbench',
+      },
+    ])
+  })
+
   it('maps a missing pull request to not-found', async () => {
     const provider = new GitHubProvider(async () => ({
       exitCode: 404,

@@ -32,7 +32,7 @@ Install straight from this Git repository:
 # Latest main:
 dsh plugin --profile web add github:zhming0/dsh-pr-panel
 # Or a pinned release:
-dsh plugin --profile web add 'github:zhming0/dsh-pr-panel#v0.1.1'
+dsh plugin --profile web add 'github:zhming0/dsh-pr-panel#v0.2.0'
 ```
 
 The command installs the package and appends its bundle to the profile. The
@@ -46,12 +46,22 @@ Then set the token in the control-plane environment:
 export GITHUB_TOKEN=...
 ```
 
-The provider resolves the token on every request. It first asks DSH's
-`credentials` service for the name in `tokenEnv`, then falls back to the process
-environment. For the dsh-yawn control plane, the sandbox credential broker is
-not read yet; export the token in the control-plane process (or add it to the
-DSH credential store) until that bridge exists. On Kubernetes, set it through
-`controlPlane.extraEnv` with a `secretKeyRef`:
+The provider resolves the token on every request, in this order:
+
+1. explicit `token` config;
+2. an optional `forgeCredentials` host service;
+3. DSH's `credentials` service for `tokenEnv`;
+4. the process environment.
+
+On dsh-yawn, the control-plane bundle provides `forgeCredentials` backed by the
+same credential broker as sandbox Git. So the existing **Settings → Secrets**
+`GITHUB_TOKEN`, workspace-scoped overrides, and **Settings → Git credentials**
+rows work without a second copy in the environment. Other distributions simply
+omit the service and fall through to the remaining sources.
+
+For an older dsh-yawn build without the service, or a distribution that does not
+provide one, set `GITHUB_TOKEN` in the control-plane environment. On Kubernetes
+that is `controlPlane.extraEnv` with a `secretKeyRef`:
 
 ```yaml
 controlPlane:
@@ -143,8 +153,10 @@ a build step. Rebuild and commit it when changing `src/`.
 - PR creation is not a direct API call: the panel's "Create change request"
   action sends the Agent a message, and the Agent runs `gh` in the sandbox.
 - Review and merge need a token with the corresponding repository permissions.
-- The provider does not read the dsh-yawn credential broker yet; use the DSH
-  credential store or the process environment.
+- Native dsh-yawn credentials are reached through the optional
+  `forgeCredentials` service in the control-plane bundle. The plugin itself
+  still has no dsh-yawn dependency; a host without the service falls back to
+  DSH credentials or the process environment.
 
 ## License
 

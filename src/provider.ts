@@ -6,7 +6,7 @@ import type {
   ForgeRepository, ForgeReviewRequest, ForgeReviewResult, MergeRequest,
 } from '@deepseek-ai/dsh-experimental-forge'
 import { GhOutputLimitError, GhTimeoutError, GhUnavailableError } from './github-runner.js'
-import type { GhOutput, GhRunner } from './github-runner.js'
+import type { GhOutput, GhRunner, GitHubCredentialRequest } from './github-runner.js'
 import { CHECKS_QUERY, hasGraphqlFields, HEAD_QUERY, mapCheckPageResponse, mapHeadResponse, mapSnapshotResponse, snapshotQuery } from './graphql.js'
 import { checkedRepository, parsePullRequestUrl, parseRemoteUrl } from './urls.js'
 import { submitGitHubReview } from './review.js'
@@ -33,7 +33,7 @@ export class GitHubProvider implements ForgeProvider {
   async submitReview(ref: ChangeRequestRef, request: ForgeReviewRequest, signal: AbortSignal): Promise<ForgeReviewResult> {
     const failure = this.hostFailure(ref.repository.host)
     if (failure !== undefined) return { ok: false, code: 'failed', message: failure.message }
-    return await submitGitHubReview(this.gh, ref, request, signal)
+    return await submitGitHubReview(this.gh, ref, request, signal, repositoryCredential(ref))
   }
 
   /**
@@ -66,7 +66,7 @@ export class GitHubProvider implements ForgeProvider {
     refs: readonly ChangeRequestRef[],
     signal: AbortSignal,
   ): Promise<ReadonlyMap<ChangeRequestKey, ChangeRequestSnapshot | ForgeFailure>> {
-    const byHost = new Map<string, ChangeRequestRef[]>()
+    const byRepository = new Map<string, ChangeRequestRef[]>()
     const results = new Map<ChangeRequestKey, ChangeRequestSnapshot | ForgeFailure>()
     for (const ref of refs) {
       const failure = this.hostFailure(ref.repository.host)
@@ -74,12 +74,14 @@ export class GitHubProvider implements ForgeProvider {
         results.set(changeRequestKey(ref), failure)
         continue
       }
-      const group = byHost.get(ref.repository.host)
-      if (group === undefined) byHost.set(ref.repository.host, [ref])
+      const key = `${ref.repository.host}/${ref.repository.owner}/${ref.repository.name}`
+      const group = byRepository.get(key)
+      if (group === undefined) byRepository.set(key, [ref])
       else group.push(ref)
     }
-    for (const [host, group] of byHost) {
-      for (const [key, result] of await this.fetchHost(host, group, signal)) results.set(key, result)
+    for (const group of byRepository.values()) {
+      const repository = group[0]!.repository
+      for (const [key, result] of await this.fetchRepository(repository, group, signal)) results.set(key, result)
     }
     return results
   }
@@ -88,7 +90,7 @@ export class GitHubProvider implements ForgeProvider {
     const failure = this.hostFailure(ref.repository.host)
     if (failure !== undefined) return failure
     try {
-      const results = await this.fetchHost(ref.repository.host, [ref], signal, true)
+      const results = await this.fetchRepository(ref.repository, [ref], signal, true)
       // oxlint-disable-next-line typescript/no-non-null-assertion -- fetchHost returns one result for each requested ref.
       return results.get(changeRequestKey(ref))!
     } catch (error) {
@@ -106,7 +108,7 @@ export class GitHubProvider implements ForgeProvider {
     const output = await this.gh([
       'api', 'graphql', '--hostname', repository.host,
       '-f', `query=${HEAD_QUERY}`, '-f', `owner=${repository.owner}`, '-f', `name=${repository.name}`, '-f', `branch=${branch}`,
-    ], signal)
+    ], signal, undefined, repositoryCredential(repository))
     const body = parseJson(output.stdout)
     if (!hasGraphqlFields(body)) throw new Error(`forge-github: head branch lookup failed: ${responseFailure(output, body).message}`)
     return mapHeadResponse(body, repository, branch)
@@ -120,7 +122,7 @@ export class GitHubProvider implements ForgeProvider {
     const { host, owner, name } = checkedRepository(ref)
     const failure = this.hostFailure(host)
     if (failure !== undefined) return { code: 'failed', message: failure.message }
-    return await this.act(['pr', 'ready', String(ref.number), '--repo', `${host}/${owner}/${name}`], signal)
+    return await this.act(['pr', 'ready', String(ref.number), '--repo', `${host}/${owner}/${name}`], signal, repositoryCredential(ref))
   }
 
   /**
@@ -137,7 +139,7 @@ export class GitHubProvider implements ForgeProvider {
     return await this.act([
       'api', '--hostname', host, '--method', 'PUT', `repos/${owner}/${name}/pulls/${ref.number}/merge`,
       '-f', `merge_method=${request.method}`, '-f', `sha=${request.headSha}`,
-    ], signal)
+    ], signal, repositoryCredential(ref))
   }
 
   /** Read the pull request's diff with `gh pr diff`, which GitHub computes against the merge base. */
@@ -145,7 +147,7 @@ export class GitHubProvider implements ForgeProvider {
     const { host, owner, name } = checkedRepository(ref)
     const failure = this.hostFailure(host)
     if (failure !== undefined) return failure
-    return await this.read(['pr', 'diff', String(ref.number), '--repo', `${host}/${owner}/${name}`, '--color', 'never'], signal)
+    return await this.read(['pr', 'diff', String(ref.number), '--repo', `${host}/${owner}/${name}`, '--color', 'never'], signal, repositoryCredential(ref))
   }
 
   /** Read one file at a commit through the contents API in its raw form. */
@@ -157,7 +159,7 @@ export class GitHubProvider implements ForgeProvider {
     return await this.read([
       'api', '--hostname', host, '-H', 'Accept: application/vnd.github.raw+json',
       `repos/${owner}/${name}/contents/${encodedPath(path)}?ref=${commit}`,
-    ], signal)
+    ], signal, repositoryCredential(ref))
   }
 
   fileUrl(ref: ChangeRequestRef, commit: string, path: string): string {
@@ -169,7 +171,7 @@ export class GitHubProvider implements ForgeProvider {
     const failure = this.hostFailure(host)
     if (failure !== undefined) return { state: 'unavailable', message: failure.message }
     try {
-      const output = await this.gh(['auth', 'status', '--hostname', host], signal)
+      const output = await this.gh(['auth', 'status', '--hostname', host], signal, undefined, { host })
       if (output.exitCode === 0) return { state: 'ready', message: null }
       return { state: 'unauthenticated', message: firstLine(output.stderr) ?? firstLine(output.stdout) ?? `gh is not signed in to ${host}` }
     } catch (error) {
@@ -182,10 +184,10 @@ export class GitHubProvider implements ForgeProvider {
    * Run one reading `gh` command, returning its output. A refusal, a `gh` that
    * cannot start, output over `maxOutputBytes`, and a run past `timeoutMs` become failures.
    */
-  private async read(args: readonly string[], signal: AbortSignal): Promise<string | ForgeFailure> {
+  private async read(args: readonly string[], signal: AbortSignal, credential?: GitHubCredentialRequest): Promise<string | ForgeFailure> {
     let output: GhOutput | GhUnavailableError
     try {
-      output = await this.attempt(args, signal)
+      output = await this.attempt(args, signal, credential)
     } catch (error) {
       if (error instanceof GhOutputLimitError) return { code: 'too-large', message: error.message }
       if (error instanceof GhTimeoutError) return { code: 'unavailable', message: error.message }
@@ -200,8 +202,8 @@ export class GitHubProvider implements ForgeProvider {
   }
 
   /** Run one changing `gh` command; a refusal or a `gh` that cannot start becomes a failure. */
-  private async act(args: readonly string[], signal: AbortSignal): Promise<ForgeActionFailure | undefined> {
-    const output = await this.attempt(args, signal)
+  private async act(args: readonly string[], signal: AbortSignal, credential?: GitHubCredentialRequest): Promise<ForgeActionFailure | undefined> {
+    const output = await this.attempt(args, signal, credential)
     if (output instanceof GhUnavailableError) return { code: 'failed', message: output.message }
     if (output.exitCode === 0) return undefined
     const { message, status } = refusal(output)
@@ -211,9 +213,9 @@ export class GitHubProvider implements ForgeProvider {
   }
 
   /** Run one `gh` command; a `gh` that cannot start resolves to its error, and every other rejection passes on. */
-  private async attempt(args: readonly string[], signal: AbortSignal): Promise<GhOutput | GhUnavailableError> {
+  private async attempt(args: readonly string[], signal: AbortSignal, credential?: GitHubCredentialRequest): Promise<GhOutput | GhUnavailableError> {
     try {
-      return await this.gh(args, signal)
+      return await this.gh(args, signal, undefined, credential)
     } catch (error) {
       if (error instanceof GhUnavailableError) return error
       throw error
@@ -226,14 +228,16 @@ export class GitHubProvider implements ForgeProvider {
     }
   }
 
-  private async fetchHost(
-    host: string,
+  private async fetchRepository(
+    repository: ForgeRepository,
     refs: readonly ChangeRequestRef[],
     signal: AbortSignal,
     completeChecks = false,
   ): Promise<ReadonlyMap<ChangeRequestKey, ChangeRequestSnapshot | ForgeFailure>> {
+    const host = repository.host
+    const credential = repositoryCredential(repository)
     const query = snapshotQuery(refs)
-    const output = await this.gh(['api', 'graphql', '--hostname', host, '-f', `query=${query.document}`], signal)
+    const output = await this.gh(['api', 'graphql', '--hostname', host, '-f', `query=${query.document}`], signal, undefined, credential)
     const body = parseJson(output.stdout)
     if (!completeChecks && hasGraphqlFields(body)) return await mapSnapshotResponse(body, query)
     let bytes = Buffer.byteLength(output.stdout)
@@ -244,7 +248,7 @@ export class GitHubProvider implements ForgeProvider {
       let page: GhOutput
       try {
         page = await this.gh(['api', 'graphql', '--hostname', host,
-          '-f', `query=${CHECKS_QUERY}`, '-f', `id=${id}`, '-f', `cursor=${cursor}`], signal)
+          '-f', `query=${CHECKS_QUERY}`, '-f', `id=${id}`, '-f', `cursor=${cursor}`], signal, undefined, credential)
       } catch (error) {
         if (signal.aborted) throw signal.reason
         if (error instanceof GhUnavailableError || error instanceof GhTimeoutError || error instanceof GhOutputLimitError) {
@@ -259,6 +263,18 @@ export class GitHubProvider implements ForgeProvider {
     })
     const failure = responseFailure(output, body)
     return new Map([...query.targets.values()].map(ref => [changeRequestKey(ref), failure] as const))
+  }
+}
+
+/** The credential context for one pull request's repository. */
+function repositoryCredential(ref: ChangeRequestRef | ForgeRepository): GitHubCredentialRequest {
+  if ('repository' in ref) {
+    const { host, owner, name } = ref.repository
+    return { host, repositoryUrl: `https://${host}/${owner}/${name}` }
+  }
+  return {
+    host: ref.host,
+    repositoryUrl: `https://${ref.host}/${ref.owner}/${ref.name}`,
   }
 }
 

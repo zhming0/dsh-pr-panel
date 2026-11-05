@@ -25,6 +25,29 @@ describe('githubRunner', () => {
     expect(new Headers(calls[0]?.init?.headers).get('authorization')).toBe('Bearer token')
   })
 
+  it('passes the host and repository URL to token resolution', async () => {
+    const requests: Array<{ host: string; repositoryUrl?: string }> = []
+    const fetch = vi.fn(async () => new Response('diff --git a/a b/a\n', { status: 200 })) as unknown as typeof globalThis.fetch
+    const run = githubRunner({
+      token: async (request) => {
+        requests.push(request)
+        return 'token'
+      },
+      timeoutMs: 1_000,
+      maxOutputBytes: 1_024,
+      fetch,
+    })
+    await run(['pr', 'diff', '1', '--repo', 'ghe.example.com/owner/repo'], signal)
+    await run(['auth', 'status', '--hostname', 'ghe.example.com'], signal)
+    expect(requests).toEqual([
+      {
+        host: 'ghe.example.com',
+        repositoryUrl: 'https://ghe.example.com/owner/repo',
+      },
+      { host: 'ghe.example.com' },
+    ])
+  })
+
   it('turns a GraphQL request into the API body', async () => {
     let body: unknown
     const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {

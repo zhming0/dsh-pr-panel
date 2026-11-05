@@ -18,12 +18,23 @@ export interface GhOutput {
 }
 
 /** Runs one `gh`-shaped command; rejects when no HTTP status was reached. */
-export type GhRunner = (args: readonly string[], signal: AbortSignal, input?: string) => Promise<GhOutput>
+export type GhRunner = (
+  args: readonly string[],
+  signal: AbortSignal,
+  input?: string,
+  credential?: GitHubCredentialRequest,
+) => Promise<GhOutput>
+
+/** One host and optional repository whose credential a request needs. */
+export interface GitHubCredentialRequest {
+  readonly host: string
+  readonly repositoryUrl?: string
+}
 
 /** Token lookup and request limits for one runner. */
 export interface GitHubRunnerConfig {
   /** Resolves the token for each request, so a rotated credential is used next time. */
-  readonly token: () => Promise<string | undefined>
+  readonly token: (request: GitHubCredentialRequest) => Promise<string | undefined>
   /** Deadline in milliseconds for one request. */
   readonly timeoutMs: number
   /** Maximum captured bytes for one response body. */
@@ -155,11 +166,12 @@ export function githubRunner(config: GitHubRunnerConfig): GhRunner {
   }
 
   const request = async (
+    credential: GitHubCredentialRequest,
     signal: AbortSignal,
     run: (token: string, deadline: AbortSignal) => Promise<GhOutput>,
   ): Promise<GhOutput> => {
     signal.throwIfAborted()
-    const token = await config.token()
+    const token = await config.token(credential)
     if (token === undefined || token.length === 0) throw new GhUnavailableError('GITHUB_TOKEN is not set')
     return await withDeadline(signal, config.timeoutMs, async (deadline) => {
       try {
@@ -173,16 +185,17 @@ export function githubRunner(config: GitHubRunnerConfig): GhRunner {
     })
   }
 
-  return async (args, signal, input) => {
+  return async (args, signal, input, explicitCredential) => {
+    const credential = explicitCredential ?? credentialFromArgs(args)
     const [command, subcommand] = args
     if (command === 'auth' && subcommand === 'status') {
-      return await request(signal, async (token, deadline) => {
+      return await request(credential, signal, async (token, deadline) => {
         const host = hostOf(args)
         return await call(`${restBase(host)}/user`, { method: 'GET', headers: accept('application/vnd.github+json') }, deadline, token)
       })
     }
     if (command === 'pr' && subcommand === 'diff') {
-      return await request(signal, async (token, deadline) => {
+      return await request(credential, signal, async (token, deadline) => {
         const repository = repositoryOf(args)
         const number = numberOf(args)
         return await call(
@@ -194,10 +207,10 @@ export function githubRunner(config: GitHubRunnerConfig): GhRunner {
       })
     }
     if (command === 'pr' && subcommand === 'ready') {
-      return await request(signal, async (token, deadline) => await ready(repositoryOf(args), numberOf(args), deadline, token))
+      return await request(credential, signal, async (token, deadline) => await ready(repositoryOf(args), numberOf(args), deadline, token))
     }
     if (command === 'api') {
-      return await request(signal, async (token, deadline) => {
+      return await request(credential, signal, async (token, deadline) => {
         const parsed = parseApiArgs(args)
         if (parsed.endpoint === 'graphql') return await graphql(parsed, deadline, token)
         return await rest(parsed, deadline, token, input)
@@ -243,6 +256,17 @@ function parseApiArgs(args: readonly string[]): ApiArgs {
 function hostOf(args: readonly string[]): string {
   const index = args.indexOf('--hostname')
   return index >= 0 && args[index + 1] !== undefined ? args[index + 1]! : DEFAULT_HOST
+}
+
+function credentialFromArgs(args: readonly string[]): GitHubCredentialRequest {
+  if (args[0] === 'pr' && (args[1] === 'diff' || args[1] === 'ready')) {
+    const repository = repositoryOf(args)
+    return {
+      host: repository.host,
+      repositoryUrl: `https://${repository.host}/${repository.owner}/${repository.name}`,
+    }
+  }
+  return { host: hostOf(args) }
 }
 
 function repositoryOf(args: readonly string[]): Repository {

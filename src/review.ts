@@ -2,7 +2,7 @@
 
 import { z } from 'zod'
 import type { ChangeRequestRef, ForgeLineComment, ForgeReviewRequest, ForgeReviewResult } from '@deepseek-ai/dsh-experimental-forge'
-import { GhUnavailableError, type GhOutput, type GhRunner } from './github-runner.js'
+import { GhUnavailableError, type GhOutput, type GhRunner, type GitHubCredentialRequest } from './github-runner.js'
 import { checkedRepository } from './urls.js'
 
 const pull = z.object({ head: z.object({ sha: z.string() }), state: z.string() })
@@ -29,13 +29,17 @@ function failed(output: GhOutput, write: boolean): ForgeReviewResult {
  * @returns a confirmed receipt, refusal, stale commit, or uncertain outcome; never retries a write.
  */
 export async function submitGitHubReview(
-  gh: GhRunner, ref: ChangeRequestRef, request: ForgeReviewRequest, signal: AbortSignal,
+  gh: GhRunner,
+  ref: ChangeRequestRef,
+  request: ForgeReviewRequest,
+  signal: AbortSignal,
+  credential?: GitHubCredentialRequest,
 ): Promise<ForgeReviewResult> {
   const { host, owner, name } = checkedRepository(ref)
   const endpoint = `repos/${owner}/${name}/pulls/${ref.number}`
   let writing = false
   try {
-    const read = await gh(['api', '--hostname', host, endpoint], signal)
+    const read = await gh(['api', '--hostname', host, endpoint], signal, undefined, credential)
     if (read.exitCode !== 0) return failed(read, false)
     const current = pull.parse(JSON.parse(read.stdout))
     if (current.head.sha !== request.headSha) return { ok: false, code: 'stale', message: 'The pull request head has changed' }
@@ -45,7 +49,7 @@ export async function submitGitHubReview(
       ? { commit_id: request.headSha, ...inline(request.comment) }
       : { commit_id: request.headSha, event: EVENTS[request.event], body: request.body, comments: request.comments.map(inline) }
     writing = true
-    const output = await gh(['api', '--hostname', host, '--method', 'POST', `${endpoint}/${request.kind === 'comment' ? 'comments' : 'reviews'}`, '--input', '-'], signal, JSON.stringify(body))
+    const output = await gh(['api', '--hostname', host, '--method', 'POST', `${endpoint}/${request.kind === 'comment' ? 'comments' : 'reviews'}`, '--input', '-'], signal, JSON.stringify(body), credential)
     if (output.exitCode !== 0) return failed(output, true)
     const result = receipt.parse(JSON.parse(output.stdout))
     const url = new URL(result.html_url)
