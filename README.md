@@ -29,7 +29,10 @@ checkout.
 Install straight from this Git repository:
 
 ```sh
+# Latest main:
 dsh plugin --profile web add github:zhming0/dsh-pr-panel
+# Or a pinned release:
+dsh plugin --profile web add 'github:zhming0/dsh-pr-panel#v0.1.0'
 ```
 
 The command installs the package and appends its bundle to the profile. The
