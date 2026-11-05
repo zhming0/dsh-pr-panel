@@ -50,7 +50,19 @@ The provider resolves the token on every request. It first asks DSH's
 `credentials` service for the name in `tokenEnv`, then falls back to the process
 environment. For the dsh-yawn control plane, the sandbox credential broker is
 not read yet; export the token in the control-plane process (or add it to the
-DSH credential store) until that bridge exists.
+DSH credential store) until that bridge exists. On Kubernetes, set it through
+`controlPlane.extraEnv` with a `secretKeyRef`:
+
+```yaml
+controlPlane:
+  extraEnv:
+    - name: GITHUB_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: dsh-yawn-github
+          key: token
+```
+
 
 To use a GitHub Enterprise host, add the host to the row config:
 
