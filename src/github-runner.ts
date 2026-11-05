@@ -81,10 +81,7 @@ export function githubRunner(config: GitHubRunnerConfig): GhRunner {
       headers: { Authorization: `Bearer ${token}`, 'User-Agent': USER_AGENT, ...init.headers },
       signal,
     })
-    const text = await response.text()
-    if (byteLength(text) > config.maxOutputBytes) {
-      throw new GhOutputLimitError(`GitHub response exceeds maxOutputBytes (${config.maxOutputBytes})`)
-    }
+    const text = await readBody(response, config.maxOutputBytes)
     if (!response.ok) {
       return { exitCode: response.status, stdout: text, stderr: `request failed (HTTP ${response.status}): ${messageFromBody(text)}` }
     }
@@ -282,6 +279,34 @@ function graphqlUrl(host: string): string {
 
 function accept(value: string): Record<string, string> {
   return { Accept: value }
+}
+
+async function readBody(response: Response, maxBytes: number): Promise<string> {
+  const declared = Number(response.headers.get('content-length'))
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    throw new GhOutputLimitError(`GitHub response exceeds maxOutputBytes (${maxBytes})`)
+  }
+  if (response.body === null) {
+    const text = await response.text()
+    if (byteLength(text) > maxBytes) throw new GhOutputLimitError(`GitHub response exceeds maxOutputBytes (${maxBytes})`)
+    return text
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let bytes = 0
+  let text = ''
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      bytes += value.byteLength
+      if (bytes > maxBytes) throw new GhOutputLimitError(`GitHub response exceeds maxOutputBytes (${maxBytes})`)
+      text += decoder.decode(value, { stream: true })
+    }
+    return text + decoder.decode()
+  } finally {
+    reader.releaseLock()
+  }
 }
 
 function byteLength(value: string): number {
