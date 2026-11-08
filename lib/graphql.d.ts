@@ -5,7 +5,7 @@ import { z } from 'zod';
 /** Continue reading the same commit's rollup even if the pull request head moves. */
 export declare const CHECKS_QUERY = "query($id: ID!, $cursor: String!) {\n  node(id: $id) { ... on StatusCheckRollup { contexts(first: 100, after: $cursor) { pageInfo { hasNextPage endCursor }\n  nodes {\n    __typename\n    ... on CheckRun {\n      id databaseId name status conclusion detailsUrl startedAt completedAt\n      checkSuite { app { id } workflowRun { event workflow { id name } } }\n    }\n    ... on StatusContext { context state targetUrl createdAt }\n  } } } }\n}";
 /** Head-branch lookup; variables `owner`, `name`, and `branch` are passed as strings. */
-export declare const HEAD_QUERY = "query($owner: String!, $name: String!, $branch: String!) {\n  repository(owner: $owner, name: $name) {\n    defaultBranchRef { name }\n    pullRequests(headRefName: $branch, states: OPEN, first: 20, orderBy: { field: CREATED_AT, direction: DESC }) { nodes { number isCrossRepository } }\n  }\n}";
+export declare const HEAD_QUERY = "query($owner: String!, $name: String!, $branch: String!) {\n  repository(owner: $owner, name: $name) {\n    nameWithOwner\n    defaultBranchRef { name }\n    pullRequests(headRefName: $branch, states: OPEN, first: 20, orderBy: { field: CREATED_AT, direction: DESC }) { nodes { number isCrossRepository } }\n  }\n}";
 declare const checkPageSchema: z.ZodObject<{
     pageInfo: z.ZodObject<{
         hasNextPage: z.ZodBoolean;
@@ -65,7 +65,8 @@ export declare function mapCheckPageResponse(body: unknown): CheckPageResult;
 /**
  * Map a head-branch lookup of {@link HEAD_QUERY}, which selects open pull requests, into change requests.
  * @param body - parsed JSON printed by `gh api graphql`.
- * @param repository - repository that was queried.
+ * @param repository - repository that was queried. It may still carry the
+ *   name the Session's remote uses, before a rename or transfer.
  * @param branch - head branch that was queried.
  * @returns open non-fork change requests for `branch`, or none when it is the default branch.
  * @throws when the response is malformed or the repository is not visible.
