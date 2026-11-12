@@ -6,10 +6,13 @@ review and merge from the same panel.
 
 This is a compatibility bundle, not a fork of the whole upstream feature. It
 mounts the upstream `@deepseek-ai/dsh-experimental-client-ui-forge` panel and
-Session bindings, and supplies two small pieces:
+Session bindings, and supplies two pieces:
 
 - a GitHub provider that uses the GitHub HTTP API and a token instead of the
-  host `gh` CLI;
+  host `gh` CLI. The provider layer is a copy of the upstream
+  `@deepseek-ai/dsh-experimental-forge-github` release, with only its `gh`
+  process boundary replaced; `src/github/` carries that copy and its
+  provenance.
 - an execution-boundary wrapper that runs the panel's per-Session Git work
   under that Session's Agent, so it reaches the sandbox in a remote deployment.
 
@@ -19,7 +22,7 @@ checkout.
 
 ## Requirements
 
-- DSH `0.2.2-rc.1` (the version this package was built against)
+- DSH `0.2.2-rc.2` (the version this package was built against)
 - The Web profile
 - A GitHub token with repository read access, and `repo` scope for review and
   merge actions
@@ -111,7 +114,10 @@ available in this bundle.
 | `tokenEnv` | `GITHUB_TOKEN` | Credential or environment name resolved per request. |
 | `hosts` | `[github.com]` | GitHub hosts this provider serves. |
 | `timeoutMs` | `30000` | Deadline for one HTTP request. |
-| `maxOutputBytes` | `8388608` | Maximum response body and complete-check payload. |
+| `maxOutputBytes` | `8388608` | Maximum response body and combined check, commit, or review payload. |
+| `maxReviewThreads` | `1000` | Most review threads counted in one status read and read in one review read. |
+| `maxCommits` | `250` | Most commits one commit listing returns. |
+| `maxViewedFiles` | `3000` | Most files whose viewed marks one read lists. |
 
 ## How it works
 
@@ -123,10 +129,15 @@ methods with `agents.withInitiator(agent, ...)`, so the existing upstream code
 runs against the right sandbox. The bundle itself stays upstream and can be
 updated independently.
 
-The GitHub provider implements the small `gh` command surface the upstream
-provider expects (`auth status`, `api`, `pr diff`, `pr ready`) on top of
-`fetch`. That kept the upstream GraphQL queries, status mapping, and review
-writer unchanged. See `src/github-runner.ts`.
+The GitHub provider implements the `gh` command surface the upstream provider
+expects (`auth status`, `api`, `pr diff`, `pr ready`) on top of `fetch`,
+including GraphQL variables, mutation bodies on stdin, and compare reads. That
+kept the upstream GraphQL queries, status mapping, review threads, viewed
+marks, and review writer unchanged. See `src/github-runner.ts`.
+
+One local behavior stays on top of the copy: `mapHeadResponse` binds a
+discovered pull request to the repository name GitHub reports, so a rename or
+transfer does not show the same request twice.
 
 ## Development
 
@@ -149,7 +160,8 @@ a build step. Rebuild and commit it when changing `src/`.
   other code hosts are not supported.
 - The panel still includes the upstream local-changes card. It inspects the
   Session's checkout through the wrapper, which can wake a hibernated sandbox.
-- The worktree feature is intentionally absent.
+- The worktree feature is intentionally absent. The upstream worktree rows are
+  not mounted, and the panel hides their controls.
 - PR creation is not a direct API call: the panel's "Create change request"
   action sends the Agent a message, and the Agent runs `gh` in the sandbox.
 - Review and merge need a token with the corresponding repository permissions.
@@ -160,6 +172,7 @@ a build step. Rebuild and commit it when changing `src/`.
 
 ## License
 
-MIT. The GitHub provider, GraphQL mapping, URL parsing, and review writer are
-derived from `deepseek-ai/deepseek-harness`
-(`packages/experimental/forge-github`, MIT). See [NOTICE](NOTICE).
+MIT. The GitHub provider, GraphQL documents, commit/compare/review helpers,
+URL parsing, and review writer under `src/github/` are derived from
+`deepseek-ai/deepseek-harness` (`packages/experimental/forge-github`, MIT).
+See [NOTICE](NOTICE).

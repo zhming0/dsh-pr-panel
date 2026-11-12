@@ -6,7 +6,8 @@ This package contains code derived from DeepSeek Harness:
 Copyright (c) DeepSeek
 Licensed under the MIT License.
 
-The derived files are src/provider.ts, src/graphql.ts, src/urls.ts,
-src/review.ts, and the provider-facing parts of src/github-runner.ts.
-They have been modified for a token-based HTTP runner and this bundle's
-package identity.
+The derived files are the modules under src/github/ (provider, GraphQL
+documents, commit, compare, review, thread, viewed, and URL helpers, plus the
+local gh shim) and the provider-facing parts of src/github-runner.ts. They
+have been modified for a token-based HTTP runner, this bundle's package
+identity, and the canonical repository binding in mapHeadResponse.

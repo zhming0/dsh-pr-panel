@@ -13,8 +13,14 @@ export interface Config {
     hosts?: string[];
     /** Deadline in milliseconds for one request. */
     timeoutMs?: number;
-    /** Maximum captured bytes for one response body and combined JSON bytes of one complete check read. */
+    /** Maximum captured bytes for one response body and combined JSON bytes of one complete check, commit, or review read. */
     maxOutputBytes?: number;
+    /** Most review threads counted in one status read and read in one review read. */
+    maxReviewThreads?: number;
+    /** Most commits one commit listing returns. */
+    maxCommits?: number;
+    /** Most files whose viewed marks one read lists. */
+    maxViewedFiles?: number;
 }
 export declare const Config: z<Config>;
 export declare function apply(ctx: Context, config: Config): void;

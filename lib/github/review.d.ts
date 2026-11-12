@@ -1,6 +1,6 @@
 /** GitHub review writes with commit checks and explicit treatment of uncertain outcomes. */
 import type { ChangeRequestRef, ForgeReviewRequest, ForgeReviewResult } from '@deepseek-ai/dsh-experimental-forge';
-import { type GhRunner, type GitHubCredentialRequest } from './github-runner.js';
+import { type GhRunner } from './gh.js';
 /**
  * Send one review mutation using JSON on stdin, never shell or argument interpolation.
  * @param gh - bounded, cancellable GitHub CLI runner.
@@ -9,4 +9,4 @@ import { type GhRunner, type GitHubCredentialRequest } from './github-runner.js'
  * @param signal - cancellation of preflight and mutation.
  * @returns a confirmed receipt, refusal, stale commit, or uncertain outcome; never retries a write.
  */
-export declare function submitGitHubReview(gh: GhRunner, ref: ChangeRequestRef, request: ForgeReviewRequest, signal: AbortSignal, credential?: GitHubCredentialRequest): Promise<ForgeReviewResult>;
+export declare function submitGitHubReview(gh: GhRunner, ref: ChangeRequestRef, request: ForgeReviewRequest, signal: AbortSignal): Promise<ForgeReviewResult>;
