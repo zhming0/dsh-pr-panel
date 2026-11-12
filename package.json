@@ -1,6 +1,6 @@
 {
   "name": "@zhming0/dsh-pr-panel",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Pull request panel for DSH Web: review GitHub PR diffs from a sandboxed Session, without worktrees",
   "license": "MIT",
   "packageManager": "pnpm@12.16.1",
