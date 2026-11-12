@@ -20,6 +20,10 @@ It deliberately does **not** mount the worktree feature. No worktree rows are
 active, so the panel hides the worktree controls and nothing creates an extra
 checkout.
 
+The upstream forge packages are peer dependencies supplied by the running DSH
+installation, so the profile never installs its own copy of a host package.
+Only the stateless helpers and third-party libraries are regular dependencies.
+
 ## Requirements
 
 - DSH `0.2.2-rc.2` (the version this package was built against)
