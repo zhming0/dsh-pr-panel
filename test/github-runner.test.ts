@@ -66,6 +66,69 @@ describe('githubRunner', () => {
     })
   })
 
+  it('resolves a repository credential for GraphQL and REST api calls', async () => {
+    const requests: Array<{ host: string; repositoryUrl?: string }> = []
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ data: {} }), { status: 200 })) as unknown as typeof globalThis.fetch
+    const run = githubRunner({
+      token: async (request) => {
+        requests.push(request)
+        return 'token'
+      },
+      timeoutMs: 1_000,
+      maxOutputBytes: 1_024,
+      fetch,
+    })
+    await run([
+      'api', 'graphql', '--hostname', 'github.com',
+      '-f', 'query=query { viewer { login } }',
+      '-f', 'owner=zhming0', '-f', 'name=dsh-workbench',
+    ], signal)
+    await run(['api', '--hostname', 'github.com', 'repos/zhming0/dsh-workbench/pulls/191'], signal)
+    await run(['api', '--hostname', 'github.com', 'user'], signal)
+    expect(requests).toEqual([
+      { host: 'github.com', repositoryUrl: 'https://github.com/zhming0/dsh-workbench' },
+      { host: 'github.com', repositoryUrl: 'https://github.com/zhming0/dsh-workbench' },
+      { host: 'github.com' },
+    ])
+  })
+
+  it('sends typed GraphQL fields as numbers', async () => {
+    let body: unknown
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      body = JSON.parse(String(init?.body))
+      return new Response(JSON.stringify({ data: {} }), { status: 200 })
+    }) as unknown as typeof globalThis.fetch
+    await runner(fetch)([
+      'api', 'graphql', '--hostname', 'github.com',
+      '-f', 'query=query ($number: Int!) { viewer { login } }',
+      '-F', 'number=12',
+      '-f', 'search=alice',
+    ], signal)
+    expect(body).toMatchObject({ variables: { number: 12, search: 'alice' } })
+  })
+
+  it('passes a GraphQL mutation body straight through stdin', async () => {
+    let body: unknown
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      body = JSON.parse(String(init?.body))
+      return new Response(JSON.stringify({ data: {} }), { status: 200 })
+    }) as unknown as typeof globalThis.fetch
+    const mutation = JSON.stringify({ query: 'mutation { __typename }', variables: { id: 'PR_1' } })
+    await runner(fetch)([
+      'api', 'graphql', '--hostname', 'github.com', '--input', '-',
+    ], signal, mutation)
+    expect(body).toEqual({ query: 'mutation { __typename }', variables: { id: 'PR_1' } })
+  })
+
+  it('accepts the escape-sequence flag on a compare read', async () => {
+    const fetch = vi.fn(async () => new Response('diff --git a/a b/a\n', { status: 200 })) as unknown as typeof globalThis.fetch
+    const output = await runner(fetch)([
+      'api', '--hostname', 'github.com', '--allow-escape-sequences',
+      'repos/zhming0/dsh-workbench/compare/main...head',
+    ], signal)
+    expect(output.exitCode).toBe(0)
+  })
+
   it('reads a pull request diff with the diff media type', async () => {
     let accept = ''
     const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {

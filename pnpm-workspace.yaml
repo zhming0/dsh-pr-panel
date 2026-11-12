@@ -1,0 +1,4 @@
+# This package follows dsh release candidates as soon as they are published,
+# which is inside pnpm's default 24-hour minimumReleaseAge window.
+minimumReleaseAgeExclude:
+  - '@deepseek-ai/*'

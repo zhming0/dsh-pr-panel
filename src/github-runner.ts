@@ -65,6 +65,8 @@ interface ApiArgs {
   readonly endpoint: string
   readonly headers: Record<string, string>
   readonly fields: Record<string, string>
+  /** Fields sent with `-F`, which the CLI parses as typed GraphQL variables. */
+  readonly typedFields: Record<string, string>
   readonly input: string | undefined
 }
 
@@ -99,14 +101,32 @@ export function githubRunner(config: GitHubRunnerConfig): GhRunner {
     return { exitCode: 0, stdout: text, stderr: '' }
   }
 
-  const graphql = async (args: ApiArgs, signal: AbortSignal, token: string): Promise<GhOutput> => {
-    const query = args.fields.query
-    if (query === undefined) throw new GhUnavailableError('gh api graphql requires a query field')
-    const variables = Object.fromEntries(Object.entries(args.fields).filter(([key]) => key !== 'query'))
+  const graphql = async (
+    args: ApiArgs,
+    signal: AbortSignal,
+    token: string,
+    input: string | undefined,
+  ): Promise<GhOutput> => {
+    let body: string
+    if (input !== undefined) {
+      body = input
+    } else {
+      const query = args.fields.query
+      if (query === undefined) throw new GhUnavailableError('gh api graphql requires a query field')
+      const variables = Object.fromEntries(
+        Object.entries(args.fields)
+          .filter(([key]) => key !== 'query')
+          .map(([key, value]) => [
+            key,
+            args.typedFields[key] === undefined ? value : typedValue(args.typedFields[key]!),
+          ]),
+      )
+      body = JSON.stringify({ query, variables })
+    }
     return await call(graphqlUrl(args.host), {
       method: 'POST',
       headers: accept('application/vnd.github+json'),
-      body: JSON.stringify({ query, variables }),
+      body,
     }, signal, token)
   }
 
@@ -141,8 +161,9 @@ export function githubRunner(config: GitHubRunnerConfig): GhRunner {
         name: repository.name,
         number: String(number),
       },
+      typedFields: { number: String(number) },
       input: undefined,
-    }, signal, token)
+    }, signal, token, undefined)
     if (read.exitCode !== 0) return read
     const body = JSON.parse(read.stdout) as {
       data?: { repository?: { pullRequest?: { id?: string; isDraft?: boolean } } }
@@ -161,8 +182,9 @@ export function githubRunner(config: GitHubRunnerConfig): GhRunner {
         }`,
         id: pull.id,
       },
+      typedFields: {},
       input: undefined,
-    }, signal, token)
+    }, signal, token, undefined)
   }
 
   const request = async (
@@ -212,7 +234,7 @@ export function githubRunner(config: GitHubRunnerConfig): GhRunner {
     if (command === 'api') {
       return await request(credential, signal, async (token, deadline) => {
         const parsed = parseApiArgs(args)
-        if (parsed.endpoint === 'graphql') return await graphql(parsed, deadline, token)
+        if (parsed.endpoint === 'graphql') return await graphql(parsed, deadline, token, input)
         return await rest(parsed, deadline, token, input)
       })
     }
@@ -226,6 +248,7 @@ function parseApiArgs(args: readonly string[]): ApiArgs {
   let endpoint = ''
   const headers: Record<string, string> = {}
   const fields: Record<string, string> = {}
+  const typedFields: Record<string, string> = {}
   let input: string | undefined
   for (let index = 1; index < args.length; index++) {
     const arg = args[index]!
@@ -245,12 +268,33 @@ function parseApiArgs(args: readonly string[]): ApiArgs {
       fields[field.slice(0, separator)] = field.slice(separator + 1)
       continue
     }
+    if (arg === '-F' || arg === '--field') {
+      const field = requireValue(args, ++index, arg)
+      const separator = field.indexOf('=')
+      if (separator <= 0) throw new GhUnavailableError(`invalid field: ${field}`)
+      const name = field.slice(0, separator)
+      fields[name] = field.slice(separator + 1)
+      typedFields[name] = field.slice(separator + 1)
+      continue
+    }
     if (arg === '--input') { input = requireValue(args, ++index, arg); continue }
+    // Upstream adds this when a diff contains control escapes; the HTTP
+    // response is already unescaped, so the flag has nothing to change.
+    if (arg === '--allow-escape-sequences') continue
     if (arg.startsWith('-')) throw new GhUnavailableError(`unsupported gh api option: ${arg}`)
     if (endpoint.length > 0) throw new GhUnavailableError(`unexpected gh api argument: ${arg}`)
     endpoint = arg
   }
-  return { host, method, endpoint, headers, fields, input }
+  return { host, method, endpoint, headers, fields, typedFields, input }
+}
+
+/** Parse a `-F` value the way `gh` does for a GraphQL variable. */
+function typedValue(value: string): unknown {
+  if (/^-?\d+$/.test(value)) return Number(value)
+  if (value === 'true') return true
+  if (value === 'false') return false
+  if (value === 'null') return null
+  return value
 }
 
 function hostOf(args: readonly string[]): string {
@@ -260,13 +304,46 @@ function hostOf(args: readonly string[]): string {
 
 function credentialFromArgs(args: readonly string[]): GitHubCredentialRequest {
   if (args[0] === 'pr' && (args[1] === 'diff' || args[1] === 'ready')) {
-    const repository = repositoryOf(args)
-    return {
-      host: repository.host,
-      repositoryUrl: `https://${repository.host}/${repository.owner}/${repository.name}`,
-    }
+    return repositoryCredential(repositoryOf(args))
+  }
+  if (args[0] === 'api') {
+    const parsed = parseApiArgs(args)
+    const repository = repositoryOfApi(parsed)
+    return repository === undefined ? { host: parsed.host } : repositoryCredential(repository)
   }
   return { host: hostOf(args) }
+}
+
+/** The repository a token resolves for, so a workspace secret can override the global one. */
+function repositoryCredential(repository: Repository): GitHubCredentialRequest {
+  return {
+    host: repository.host,
+    repositoryUrl: `https://${repository.host}/${repository.owner}/${repository.name}`,
+  }
+}
+
+/**
+ * Recover the repository an `api` call targets. The provider no longer passes
+ * one with each call, and the credential broker needs it to apply a
+ * workspace-scoped secret. GraphQL calls carry `owner` and `name` as
+ * variables; REST calls name the repository in the endpoint.
+ */
+function repositoryOfApi(args: ApiArgs): Repository | undefined {
+  if (args.endpoint === 'graphql') {
+    const owner = args.fields.owner
+    const name = args.fields.name
+    if (owner === undefined || name === undefined || !isSegment(owner) || !isSegment(name)) return undefined
+    return { host: args.host, owner, name }
+  }
+  const match = /^repos\/([^/]+)\/([^/?#]+)/.exec(args.endpoint)
+  if (match === null) return undefined
+  const [, owner, name] = match
+  if (owner === undefined || name === undefined || !isSegment(owner) || !isSegment(name)) return undefined
+  return { host: args.host, owner, name }
+}
+
+function isSegment(value: string): boolean {
+  return /^[A-Za-z0-9_.-]+$/.test(value)
 }
 
 function repositoryOf(args: readonly string[]): Repository {

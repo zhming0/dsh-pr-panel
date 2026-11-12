@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ForgeRepository } from '@deepseek-ai/dsh-experimental-forge'
-import { mapHeadResponse } from '../src/graphql.js'
+import { mapHeadResponse } from '../src/github/graphql.js'
 
 const queried: ForgeRepository = { forge: 'github', host: 'github.com', owner: 'zhming0', name: 'dsh-workbench' }
 
