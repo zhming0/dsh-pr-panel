@@ -169,21 +169,6 @@ importers:
       '@deepseek-ai/dsh-brand':
         specifier: 0.2.2-rc.2
         version: 0.2.2-rc.2(@deepseek-ai/cordis@4.1.0)
-      '@deepseek-ai/dsh-credentials':
-        specifier: 0.2.2-rc.2
-        version: 0.2.2-rc.2(@deepseek-ai/cordis@4.1.0)
-      '@deepseek-ai/dsh-experimental-client-ui-forge':
-        specifier: 0.2.2-rc.2
-        version: 0.2.2-rc.2(8f19222551360c83e8feec22cf513f75)
-      '@deepseek-ai/dsh-experimental-forge':
-        specifier: 0.2.2-rc.2
-        version: 0.2.2-rc.2(@deepseek-ai/cordis@4.1.0)
-      '@deepseek-ai/dsh-experimental-forge-session':
-        specifier: 0.2.2-rc.2
-        version: 0.2.2-rc.2(b81ae00841286cfc334e1aea267c13a8)
-      '@deepseek-ai/dsh-experimental-worktree':
-        specifier: 0.2.2-rc.2
-        version: 0.2.2-rc.2(a396b01dfb2e2129488b6846f1353536)
       '@deepseek-ai/dsh-timeout':
         specifier: 0.2.2-rc.2
         version: 0.2.2-rc.2(@deepseek-ai/cordis@4.1.0)
@@ -203,6 +188,18 @@ importers:
       '@deepseek-ai/dsh-agent':
         specifier: 0.2.2-rc.2
         version: 0.2.2-rc.2(f47dad52125409688a1be5d1e9f1f24a)
+      '@deepseek-ai/dsh-credentials':
+        specifier: 0.2.2-rc.2
+        version: 0.2.2-rc.2(@deepseek-ai/cordis@4.1.0)
+      '@deepseek-ai/dsh-experimental-client-ui-forge':
+        specifier: 0.2.2-rc.2
+        version: 0.2.2-rc.2(8f19222551360c83e8feec22cf513f75)
+      '@deepseek-ai/dsh-experimental-forge':
+        specifier: 0.2.2-rc.2
+        version: 0.2.2-rc.2(@deepseek-ai/cordis@4.1.0)
+      '@deepseek-ai/dsh-experimental-forge-session':
+        specifier: 0.2.2-rc.2
+        version: 0.2.2-rc.2(b81ae00841286cfc334e1aea267c13a8)
       '@deepseek-ai/dsh-session':
         specifier: 0.2.2-rc.2
         version: 0.2.2-rc.2(@deepseek-ai/cordis@4.1.0)(@deepseek-ai/dsh-error@0.2.2-rc.2(@deepseek-ai/cordis@4.1.0))(@deepseek-ai/dsh-scope@0.2.2-rc.2(@deepseek-ai/cordis@4.1.0))
